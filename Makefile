@@ -9,6 +9,7 @@ test:
 
 clean:
 	find . -name "*.py[c|o]" -o -name __pycache__ -exec rm -rf {} +
+	find . -name .pytest_cache -exec rm -rf {} +
 
 config:
 	git config --local include.path ../.gitconfig
