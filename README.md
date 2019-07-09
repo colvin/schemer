@@ -78,6 +78,10 @@ the macro `FOO` (which appears as `MACRO{FOO}` in the SQL files) as the value
 {"FOO":1,"BAR":"bar"}
 ```
 
+If a macro is present in a SQL file and the macro key cannot be resolved, a
+`KeyError` is raised and the process fails. Note that because output is
+produced as files are processed an error can result in incomplete output.
+
 # OPTIONS
 
 - `-p PATH, --path PATH` path to the prefix directory

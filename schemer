@@ -3,64 +3,76 @@
 # $Id$
 
 """
-schemer -- compose sql schema definitions from components
+`schemer` composes a single stream of SQL from multiple SQL file sources using
+ordering rules and performs macro replacement.
 
-This utility generates a complete schema definition out of individual
-components, using a simple declarative ordering syntax and macro replacement.
+A directory structure like the following is expected:
 
-A schemer definition consists of a directory hierarchy similar to the following:
+```
+  prefix/
+  |-- ORDER
+  |-- PROLOGUE.sql
+  |-- EPILOGUE.sql
+  |-- one/
+  |   |-- ORDER
+  |   |-- PROLOGUE.sql
+  |   |-- EPILOGUE.sql
+  |   |-- A.sql
+  |   |-- B.sql
+  |   `-- ...
+  `-- two/
+      |-- ORDER
+      |-- PROLOGUE.sql
+      |-- EPILOGUE.sql
+      |-- X.sql
+      |-- Y.sql
+      `-- ...
+```
 
-        top/
-        |-- ORDER
-        |-- PROLOGUE.sql
-        |-- EPILOGUE.sql
-        |-- one/
-        |   |-- ORDER
-        |   |-- PROLOGUE.sql
-        |   |-- EPILOGUE.sql
-        |   |-- A.sql
-        |   |-- B.sql
-        |   `-- ...
-        `-- two/
-            |-- ORDER
-            |-- PROLOGUE.sql
-            |-- EPILOGUE.sql
-            |-- X.sql
-            |-- Y.sql
-            `-- ...
+The top-level _prefix_ directory must contain a file named `ORDER`. This file
+contains an ordered list of one or more directory names, one per line,
+corresponding to child directories of the prefix. This defines the order in
+which directories are processed. Each child directory generally corresponds to
+a schema.
 
+Each child directory must also contain a file named `ORDER`. This file contains
+an ordered list of one or more file patterns, one per line. Each pattern should
+match one or more file names within that child directory, using explicit paths
+rooted in that directory and/or globs. This `ORDER` file defines the order in
+which files are concatenated within this directory.
 
-The top-level prefix directory must contain a file named ORDER. Each directory
-within the prefix directory represents an individual database schema, and the
-top-level ORDER files defines the order in which they are processed. The ORDER
-file contians a single directory name per line.
+If files match multiple patterns within the child directory `ORDER` file, each
+file will only be processed once, and will be processed at its earliest
+appearance in the order.
 
-Each schema directory must also contain an ORDER file. These ORDER files
-contain a series of filename globs that describe the order in which files in
-that directory should be composed. The file list is deduplicated in case any
-globs overlap, keeping the first occurrence of any given file.
+If a file named `PROLOGUE.sql` exists within the prefix directory, it is
+processed as the first file in the sequence. If a file named `EPILOGUE.sql`
+exists, it is processed as the very last file in the sequence. Similarly, each
+child directory may also contain a `PROLOGUE.sql` and/or `EPILOGUE.sql` file,
+which are placed at the very beginning and very end of the sequence for that
+child directory.
 
-If a PROLOGUE.sql file exists in a schema directory, it is placed at the
-beginning of the file list for that schema. Similarly, if an EPILOGUE.sql file
-exists it is placed at the end of the list. The PROLOGUE.sql and EPILOGUE.sql
-files in the top-level prefix directory are placed at the beginning and end of
-the complete file list.
+Once the order has been determined, each file is processed for macros and
+emitted to standard output (or a file if `-o FILE` is used).
 
-Once the fully ordered list has been determined, the files are read in that
-order and concatenated. While processing the files macros are detected and
-replaced. Macros are identified by the pattern 'MACRO{key}', where the pattern
-is replaced by the value of 'key'. Macro values are taken from the environment,
-from a macro file, or from JSON data provided on the command line.
+Macros are identified by the pattern `MACRO{KEY}`, where `KEY` is the name of a
+macro key. Macros are replaced using key/value definitions taken from a macro
+file (using `-f FILE`), JSON data (using `-m JSON`), or the environment.
 
-Macro files are formatted as a series of lines in the format:
-        key = value
+Macro files use a simple line-wise `key = value` syntax. No quote interpolation
+is used, so any quotes in the value is considered part of the value.
 
-By default, the completed schema definition is printed to standard output. The
-'mode' parameter of the constructor selects the manner in which the result is
-handled:
-    - stdout prints to standard output
-    - file prints to the file specified by output_file
-    - buffer stores the output in an array of lines
+Macro JSON is converted directly into a dictionary. The following will define
+the macro `FOO` (which appears as `MACRO{FOO}` in the SQL files) as the value
+`1`, while the macro `BAR` (`MACRO{BAR}`) will be defined as the value `bar`.
+
+```
+{"FOO":1,"BAR":"bar"}
+```
+
+If a macro is present in a SQL file and the macro key cannot be resolved, a
+`KeyError` is raised and the process fails. Note that because output is
+produced as files are processed an error can result in incomplete output.
 """
 
 import os
@@ -75,19 +87,21 @@ class Schemer():
     def __init__(self, prefix, macro_files=None, macros=None, mode='stdout',
             output_file=None):
         """
-        Constructor for Schemer.
+        Construct an instance of the Schemer class.
 
-        The `prefix` argument, a string containing the path to the top-level
-        directory of the schema definition, is required.
+        Arguments:
+          prefix (string): the top-level directory
 
-        If `macro_files` is not None, it should contain a list of file paths
-        containing macros.
-
-        If `macros` is not None, it should contain a dictionary of macros.
-
-        If the `mode` is 'file', `output_file` must be set to a file path to
-        which the results are written.
+        Keyword Arguments:
+          macro_files (list): list of file paths to macro definition files
+          macros (dict): a dictionary of key-value macro definitions
+          mode (string): the output data format, one of
+              [`stdout`, `file`, `buffer`]
+              (default: `stdout`)
+          output_file (string): path to an output file, required if `mode` is
+              `file`
         """
+
         self.prefix = prefix
         self.mode = mode
         self.output_file = output_file
@@ -103,8 +117,9 @@ class Schemer():
     def load_order(self):
         """
         Read the schema definition and compose the complete file order. The
-        completed order is stored in the `order` attribute.
+        completed order is cached in the `order` attribute of the object.
         """
+
         with open('/'.join([self.prefix, 'ORDER']), 'r') as f:
             schema_dirs = [d.strip() for d in f.readlines()]
         for d in schema_dirs:
@@ -128,9 +143,10 @@ class Schemer():
 
     def load_macro_files(self, macro_files):
         """
-        Read each file in the `macro_files` list and load the macros they
+        Read each file in the `macro_files` list and cache the macros they
         contain.
         """
+
         for mf in macro_files:
             with open(mf, 'r') as f:
                 for l in f.readlines():
@@ -142,26 +158,34 @@ class Schemer():
 
     def add_macros(self, macros):
         """
-        Add the `macros` dictionary to the cached macros. Existing keys will be
-        overwritten.
+        Add the `macros` dictionary to the cached macros. Keys that are already
+        cached by a previous call to this method or the `load_macro_files()`
+        method are overwritten.
         """
+
         if macros:
             self.macros.update(macros)
 
     def get_macro_value(self, key):
         """
-        Return the value of the macro with the name `key`. The value is taken
-        from the cached `macros` list. If not present, `key` is looked up in
-        environment. A KeyError is raised if `key` cannot be found.
+        Return the value of the macro with the name `key`.
+
+        The value is taken from the cached `macros` dictionary attributes. If
+        not present, `key` is requested from the environment.
+
+        Raises:
+          KeyError, if the requested key cannot be found
         """
+
         if key in self.macros:
             return self.macros[key]
         return os.environ[key]
 
     def process_line(self, line):
         """
-        Replaces macros found in the line of text and returns the new line.
+        Replace macros found in the line of text and return the new line.
         """
+
         match = re.findall(r'MACRO\{(.*?)\}', line)
         if not match:
             return line
@@ -174,11 +198,14 @@ class Schemer():
 
     def dispatch_line(self, line):
         """
-        Put the line of text where it needs to go. If the `mode` is 'stdout',
-        the line is printed. If the `mode` is 'file', the line is written to
-        the `output_file`. If the `mode` is 'buffer', the line is appended to
-        the `output_buffer` array.
+        Output the line of text.
+
+        If the `mode` is 'stdout', the line is printed to standard output. If
+        the `mode` is 'file', the line is written to the file stored in the
+        `output_file` attribute. If the `mode` is 'buffer', the line is
+        appended to the `output_buffer` array attribute.
         """
+
         if self.mode == 'stdout':
             print(line)
         elif self.mode == 'file':
@@ -190,18 +217,21 @@ class Schemer():
         """
         Print the file processing order to standard output.
         """
+
         print(json.dumps(self.order, indent=2))
 
     def dump_macros(self):
         """
         Print the cached macros to standard output.
         """
+
         print(json.dumps(self.macros, indent=2))
 
     def run(self):
         """
         Compose the complete schema and produce the complete output.
         """
+
         if self.mode == 'file':
             self.output_fh = open(self.output_file, 'w')
         for sql_file in self.order:
@@ -214,6 +244,10 @@ class Schemer():
 
 
 def main():
+    """
+    Process command line flags and invoke the `Schemer.run()` routine.
+    """
+
     parser = argparse.ArgumentParser(
             description='build schema files from structured components')
 
