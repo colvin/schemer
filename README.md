@@ -89,6 +89,19 @@ produced as files are processed an error can result in incomplete output.
 - `-m JSON, --macro JSON` define macros in a JSON string
 - `-f FILE, --macro-file FILE` read the given file for macro definitions
 
+# DEVELOPER SETUP
+
+This project uses a git filter to place CVS-style ID tags into certain source
+files when they are checked out. The tags are replaced with their placeholder,
+(the `$Id$` comment that appears near the beginning of the file) when commits
+are pushed to Github. This is useful for determining the exact version of the
+program that is installed.
+
+In order for this to work, the git configuration needs to be updated to
+reference this project's embedded `.gitconfig`. Once the repository has been
+cloned, run the `make config` command to set this up, and then run `make
+rcs-tag` to ensure the tags are properly set.
+
 # LICENSE
 
 This program is provide under the terms of the BSD 2-clause License.
