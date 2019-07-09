@@ -1,0 +1,3 @@
+[filter "rcs"]
+	clean	= .git_filters/rcs-clean
+	smudge	= .git_filters/rcs-smudge %f

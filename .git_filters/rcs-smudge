@@ -1,0 +1,1 @@
+sed "s;\\\$Id\\\$;\$Id $1 `git log -1 --pretty=format:"%H %aI %an" -- $1` \$;"
