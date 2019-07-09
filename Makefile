@@ -2,7 +2,15 @@
 
 PROJECT_ROOT	= $(shell git rev-parse --show-toplevel)
 
-default:
+DESTDIR		= /usr/local
+BIN_USR		= root
+BIN_GRP		= wheel
+BIN_MOD		= 755
+
+default: install
+
+install:
+	install -o $(BIN_USR) -g $(BIN_GRP) -m $(BIN_MOD) schemer $(PREFIX)/bin/schemer
 
 test:
 	pytest -v

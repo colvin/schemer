@@ -102,6 +102,21 @@ reference this project's embedded `.gitconfig`. Once the repository has been
 cloned, run the `make config` command to set this up, and then run `make
 rcs-tag` to ensure the tags are properly set.
 
+# INSTALLING
+
+Run `make install` to install `schemer`. It only depends on Python and its core
+libraries, but has only been tested on Python 3.
+
+The `DESTDIR` variable controls the prefix directory. `schemer` will be
+installed as `$DESTDIR/bin/schemer`. Use `make install DESTDIR=/some/path` to
+override the default value of `/usr/local`. No attempt to create the `bin`
+directory is made, so when installing into an alternative location that
+directory will need to exist prior to installation.
+
+The installed file is set to be owned by `root:wheel`, which can be overwritten
+using the `BIN_USR` and `BIN_GRP` variables. The file mode can also be
+overwritten using the `BIN_MOD` variable, which defaults to `755`.
+
 # LICENSE
 
 This program is provide under the terms of the BSD 2-clause License.
