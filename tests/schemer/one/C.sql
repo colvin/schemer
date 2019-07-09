@@ -1,0 +1,7 @@
+# one/C.sql
+
+CREATE TABLE `C` (
+	id	SERIAL PRIMARY KEY,
+	val	VARCHAR(255) NOT NULL
+);
+

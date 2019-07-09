@@ -1,0 +1,250 @@
+#!/usr/bin/env python
+#
+# $Id$
+
+"""
+schemer -- compose sql schema definitions from components
+
+This utility generates a complete schema definition out of individual
+components, using a simple declarative ordering syntax and macro replacement.
+
+A schemer definition consists of a directory hierarchy similar to the following:
+
+        top/
+        |-- ORDER
+        |-- PROLOGUE.sql
+        |-- EPILOGUE.sql
+        |-- one/
+        |   |-- ORDER
+        |   |-- PROLOGUE.sql
+        |   |-- EPILOGUE.sql
+        |   |-- A.sql
+        |   |-- B.sql
+        |   `-- ...
+        `-- two/
+            |-- ORDER
+            |-- PROLOGUE.sql
+            |-- EPILOGUE.sql
+            |-- X.sql
+            |-- Y.sql
+            `-- ...
+
+
+The top-level prefix directory must contain a file named ORDER. Each directory
+within the prefix directory represents an individual database schema, and the
+top-level ORDER files defines the order in which they are processed. The ORDER
+file contians a single directory name per line.
+
+Each schema directory must also contain an ORDER file. These ORDER files
+contain a series of filename globs that describe the order in which files in
+that directory should be composed. The file list is deduplicated in case any
+globs overlap, keeping the first occurrence of any given file.
+
+If a PROLOGUE.sql file exists in a schema directory, it is placed at the
+beginning of the file list for that schema. Similarly, if an EPILOGUE.sql file
+exists it is placed at the end of the list. The PROLOGUE.sql and EPILOGUE.sql
+files in the top-level prefix directory are placed at the beginning and end of
+the complete file list.
+
+Once the fully ordered list has been determined, the files are read in that
+order and concatenated. While processing the files macros are detected and
+replaced. Macros are identified by the pattern 'MACRO{key}', where the pattern
+is replaced by the value of 'key'. Macro values are taken from the environment,
+from a macro file, or from JSON data provided on the command line.
+
+Macro files are formatted as a series of lines in the format:
+        key = value
+
+By default, the completed schema definition is printed to standard output. The
+'mode' parameter of the constructor selects the manner in which the result is
+handled:
+    - stdout prints to standard output
+    - file prints to the file specified by output_file
+    - buffer stores the output in an array of lines
+"""
+
+import os
+import argparse
+import glob
+import json
+import re
+from collections import OrderedDict
+
+
+class Schemer():
+    def __init__(self, prefix, macro_files=None, macros=None, mode='stdout',
+            output_file=None):
+        """
+        Constructor for Schemer.
+
+        The `prefix` argument, a string containing the path to the top-level
+        directory of the schema definition, is required.
+
+        If `macro_files` is not None, it should contain a list of file paths
+        containing macros.
+
+        If `macros` is not None, it should contain a dictionary of macros.
+
+        If the `mode` is 'file', `output_file` must be set to a file path to
+        which the results are written.
+        """
+        self.prefix = prefix
+        self.mode = mode
+        self.output_file = output_file
+        self.output_fh = None
+        self.output_buffer = []
+        self.order = []
+        self.load_order()
+        self.macros = {}
+        if macro_files:
+            self.load_macro_files(macro_files)
+        self.add_macros(macros)
+
+    def load_order(self):
+        """
+        Read the schema definition and compose the complete file order. The
+        completed order is stored in the `order` attribute.
+        """
+        with open('/'.join([self.prefix, 'ORDER']), 'r') as f:
+            schema_dirs = [d.strip() for d in f.readlines()]
+        for d in schema_dirs:
+            with open('/'.join([self.prefix, d, 'ORDER']), 'r') as f:
+                dir_globs = [e.strip() for e in f.readlines()]
+            dir_files = []
+            for g in dir_globs:
+                for gf in sorted(glob.glob('/'.join([self.prefix, d, g]))):
+                    dir_files.append(gf)
+            prologue = '/'.join([self.prefix, d, 'PROLOGUE.sql'])
+            if os.path.isfile(prologue):
+                dir_files.insert(0, prologue)
+            epilogue = '/'.join([self.prefix, d, 'EPILOGUE.sql'])
+            while epilogue in dir_files:
+                dir_files.remove(epilogue)
+            if os.path.isfile(epilogue):
+                dir_files.append('/'.join([self.prefix, d, 'EPILOGUE.sql']))
+            _ = [self.order.append(e) for e in OrderedDict((i, 1) for i in dir_files).keys()]
+        self.order.insert(0, '/'.join([self.prefix, 'PROLOGUE.sql']))
+        self.order.append('/'.join([self.prefix, 'EPILOGUE.sql']))
+
+    def load_macro_files(self, macro_files):
+        """
+        Read each file in the `macro_files` list and load the macros they
+        contain.
+        """
+        for mf in macro_files:
+            with open(mf, 'r') as f:
+                for l in f.readlines():
+                    g = re.match(r'^(.*)\s+=\s+(.*)', l)
+                    if g is None:
+                        print('skipping: {}'.format(l))
+                        continue
+                    self.add_macros({g.groups()[0]: g.groups()[1]})
+
+    def add_macros(self, macros):
+        """
+        Add the `macros` dictionary to the cached macros. Existing keys will be
+        overwritten.
+        """
+        if macros:
+            self.macros.update(macros)
+
+    def get_macro_value(self, key):
+        """
+        Return the value of the macro with the name `key`. The value is taken
+        from the cached `macros` list. If not present, `key` is looked up in
+        environment. A KeyError is raised if `key` cannot be found.
+        """
+        if key in self.macros:
+            return self.macros[key]
+        return os.environ[key]
+
+    def process_line(self, line):
+        """
+        Replaces macros found in the line of text and returns the new line.
+        """
+        match = re.findall(r'MACRO\{(.*?)\}', line)
+        if not match:
+            return line
+        macros = [e for e in OrderedDict((i, 1) for i in match).keys()]
+        processed = line
+        for m in macros:
+            v = self.get_macro_value(m)
+            processed = re.sub(r'MACRO{{{}}}'.format(m), v, processed)
+        return processed
+
+    def dispatch_line(self, line):
+        """
+        Put the line of text where it needs to go. If the `mode` is 'stdout',
+        the line is printed. If the `mode` is 'file', the line is written to
+        the `output_file`. If the `mode` is 'buffer', the line is appended to
+        the `output_buffer` array.
+        """
+        if self.mode == 'stdout':
+            print(line)
+        elif self.mode == 'file':
+            print(line, file=self.output_fh)
+        elif self.mode == 'buffer':
+            self.output_buffer.append(line + '\n')
+
+    def dump_order(self):
+        """
+        Print the file processing order to standard output.
+        """
+        print(json.dumps(self.order, indent=2))
+
+    def dump_macros(self):
+        """
+        Print the cached macros to standard output.
+        """
+        print(json.dumps(self.macros, indent=2))
+
+    def run(self):
+        """
+        Compose the complete schema and produce the complete output.
+        """
+        if self.mode == 'file':
+            self.output_fh = open(self.output_file, 'w')
+        for sql_file in self.order:
+            with open(sql_file, 'r') as f:
+                for line in f.readlines():
+                    processed = self.process_line(line.rstrip())
+                    self.dispatch_line(processed)
+        if self.output_fh:
+            self.output_fh.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+            description='build schema files from structured components')
+
+    parser.add_argument('-p', '--prefix', type=str, default='./schema',
+            metavar='PATH', help='Path to the top-level directory of the schema definition')
+    parser.add_argument('-o', '--output', type=str,
+            metavar='FILE', help='Path to the output file')
+    parser.add_argument('-f', '--macro-file', type=str, action='append',
+            metavar='FILE', help='Path to a file containing macros')
+    parser.add_argument('-m', '--macro', type=str,
+            metavar='JSON', help='JSON document containing macros')
+
+    args = parser.parse_args()
+
+    macro_files = []
+    if args.macro_file:
+        macro_files = args.macro_file
+
+    macros = None
+    if args.macro:
+        macros = json.loads(args.macro)
+
+    mode = 'stdout'
+    output_file = None
+    if args.output:
+        mode = 'file'
+        output_file = args.output
+
+    schemer = Schemer(args.prefix, macro_files=macro_files, macros=macros,
+            mode=mode, output_file=output_file)
+    schemer.run()
+
+if __name__ == '__main__':
+    main()

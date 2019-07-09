@@ -1,0 +1,5 @@
+TEST_USER	= leroy
+TEST_PASSWORD	= jenkins
+SCHEMA_ONE	= lemon
+SCHEMA_TWO	= lime
+SCHEMA_THREE	= snarf

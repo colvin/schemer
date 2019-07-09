@@ -1,0 +1,7 @@
+# three/B.sql
+
+CREATE TABLE `B` (
+	id	SERIAL PRIMARY KEY,
+	val	VARCHAR(255) NOT NULL
+);
+

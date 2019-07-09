@@ -1,0 +1,4 @@
+# three/PROLOGUE.sql
+
+USE `MACRO{SCHEMA_THREE}`;
+
